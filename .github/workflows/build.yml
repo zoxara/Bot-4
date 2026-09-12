@@ -1,4 +1,4 @@
-name: Ultimate Auto-Build Android APK
+name: Ultimate Native Android APK Build
 
 on:
   push:
@@ -18,67 +18,164 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: 18
-
-      - name: Build APK with fixed config and web path
+      - name: Build Pure Android WebView APK
         run: |
-          echo "Locating source zip file..."
+          echo "Locating and extracting zip..."
           UNZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
           
-          mkdir -p extracted_source
+          mkdir -p web_content
           if [ -n "$UNZIP_FILE" ]; then
-            echo "Extracting $UNZIP_FILE..."
-            unzip -q "$UNZIP_FILE" -d extracted_source
+            unzip -q "$UNZIP_FILE" -d web_content
           else
-            echo "No zip found, copying repository files..."
-            cp -r * extracted_source/ 2>/dev/null || true
+            cp -r * web_content/ 2>/dev/null || true
           fi
 
-          npx cordova create build-workspace com.mql5.eastudio MQL5EAStudio
-          cd build-workspace
+          # Create a clean Android project structure using standard tools
+          mkdir -p android-project/app/src/main/assets/www
+          mkdir -p android-project/app/src/main/java/com/mql5/eastudio
+          mkdir -p android-project/app/src/main/res/values
 
-          # Clear default www folder completely
-          rm -rf www/*
-
-          # Safely copy extracted files directly into www
-          if [ -d "../extracted_source" ]; then
-            SUB_FOLDER=$(ls -F ../extracted_source | grep '/' | head -n 1)
-            ITEM_COUNT=$(ls -A ../extracted_source | wc -l)
-            
-            if [ "$ITEM_COUNT" -eq 1 ] && [ -n "$SUB_FOLDER" ]; then
-              cp -r ../extracted_source/$SUB_FOLDER/* www/ 2>/dev/null || true
-            else
-              cp -r ../extracted_source/* www/ 2>/dev/null || true
-            fi
+          # Copy user web files directly into Android assets/www
+          SUB_FOLDER=$(ls -F web_content | grep '/' | head -n 1)
+          ITEM_COUNT=$(ls -A web_content | wc -l)
+          
+          if [ "$ITEM_COUNT" -eq 1 ] && [ -n "$SUB_FOLDER" ]; then
+            cp -r web_content/$SUB_FOLDER/* android-project/app/src/main/assets/www/ 2>/dev/null || true
+          else
+            cp -r web_content/* android-project/app/src/main/assets/www/ 2>/dev/null || true
           fi
 
-          # Ensure index.html exists in www root
-          if [ ! -f "www/index.html" ]; then
-            echo "WARNING: index.html not directly in root, searching..."
-            FOUND_HTML=$(find www -name "index.html" | head -n 1)
-            if [ -n "$FOUND_HTML" ]; then
-              DIR_NAME=$(dirname "$FOUND_HTML")
-              if [ "$DIR_NAME" != "www" ]; then
-                cp -r "$DIR_NAME"/* www/ 2>/dev/null || true
-              fi
-            fi
+          # Ensure index.html exists in assets/www
+          if [ ! -f "android-project/app/src/main/assets/www/index.html" ]; then
+            echo '<!DOCTYPE html><html><head><title>MQL5 EA Studio</title></head><body><h1>MQL5 EA Studio App</h1></body></html>' > android-project/app/src/main/assets/www/index.html
           fi
 
-          # Fix config.xml to ensure proper asset loading
-          if [ -f "config.xml" ]; then
-            sed -i 's|<content src="index.html" />|<content src="index.html" />|g' config.xml
-          fi
+          cd android-project
 
-          npx cordova platform add android --nosave || true
-          npx cordova build android --debug
+          # Create AndroidManifest.xml
+          cat << 'EOF' > app/src/main/AndroidManifest.xml
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              package="com.mql5.eastudio">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <application
+                  android:allowBackup="true"
+                  android:icon="@mipmap/ic_launcher"
+                  android:label="MQL5 EA Studio"
+                  android:usesCleartextTraffic="true"
+                  android:roundIcon="@mipmap/ic_launcher"
+                  android:supportsRtl="true"
+                  android:theme="@style/Theme.AppCompat.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          # Create MainActivity.java to load local assets properly without localhost error
+          cat << 'EOF' > app/src/main/java/com/mql5/eastudio/MainActivity.java
+          package com.mql5.eastudio;
+
+          import android.app.Activity;
+          import android.os.Bundle;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+
+          public class MainActivity extends Activity {
+              private WebView myWebView;
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  myWebView = new WebView(this);
+                  WebSettings webSettings = myWebView.getSettings();
+                  webSettings.setJavaScriptEnabled(true);
+                  webSettings.setDomStorageEnabled(true);
+                  webSettings.setAllowFileAccess(true);
+                  webSettings.setAllowContentAccess(true);
+                  
+                  myWebView.setWebViewClient(new WebViewClient());
+                  myWebView.loadUrl("file:///android_asset/www/index.html");
+                  setContentView(myWebView);
+              }
+
+              @Override
+              public void onBackPressed() {
+                  if (myWebView.canGoBack()) {
+                      myWebView.goBack();
+                  } else {
+                      super.onBackPressed();
+                  }
+              }
+          }
+          EOF
+
+          # Create build.gradle files for building the APK
+          cat << 'EOF' > build.gradle
+          buildscript {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+              dependencies {
+                  classpath 'com.android.tools.build:gradle:7.4.2'
+              }
+          }
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          EOF
+
+          cat << 'EOF' > settings.gradle
+          include ':app'
+          EOF
+
+          cat << 'EOF' > app/build.gradle
+          plugins {
+              id 'com.android.application'
+          }
+          android {
+              compileSdk 33
+              defaultConfig {
+                  applicationId "com.mql5.eastudio"
+                  minSdk 21
+                  targetSdk 33
+                  versionCode 1
+                  versionName "1.0"
+              }
+              buildTypes {
+                  release {
+                      minifyEnabled false
+                  }
+              }
+          }
+          dependencies {
+              implementation 'androidx.appcompat:appcompat:1.6.1'
+          }
+          EOF
+
+          echo "gradle.properties created"
+          echo "android.useAndroidX=true" > gradle.properties
+          echo "android.enableJetifier=true" >> gradle.properties
+
+          # Build debug APK using gradle wrapper or direct command if available, or download gradle
+          export PATH=$PATH:$PWD
+          gradle wrapper --gradle-version 7.5
+          ./gradlew assembleDebug
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: mql5-ea-studio-apk
           path: |
+            android-project/app/build/outputs/apk/debug/*.apk
             **/build/outputs/apk/debug/*.apk
-            **/*.apk
