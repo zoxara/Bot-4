@@ -23,43 +23,48 @@ jobs:
         with:
           node-version: 18
 
-      - name: Build APK without modifying source zip data
+      - name: Build APK with exact zip preservation
         run: |
           echo "Locating source zip file..."
           UNZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
           
           mkdir -p extracted_source
           if [ -n "$UNZIP_FILE" ]; then
-            echo "Extracting $UNZIP_FILE safely..."
+            echo "Extracting $UNZIP_FILE..."
             unzip -q "$UNZIP_FILE" -d extracted_source
           else
             echo "No zip found, copying repository files..."
             cp -r * extracted_source/ 2>/dev/null || true
           fi
 
-          # Create an independent working environment for Cordova without touching extracted files
           npx cordova create build-workspace com.mql5.eastudio MQL5EAStudio
           cd build-workspace
 
-          # Clear default cordova welcome template
-          rm -rf www/*
+          # Remove default www completely
+          rm -rf www
 
-          # Safely copy extracted user files directly into www preserving everything intact
+          # Directly copy the extracted source folder as the new www directory to preserve 100% original structure
           if [ -d "../extracted_source" ]; then
-            # If the zip has a single root folder, copy its contents; otherwise copy all
-            ROOT_CONTENT=$(ls -A ../extracted_source)
-            ITEM_COUNT=$(echo "$ROOT_CONTENT" | wc -l)
+            # Check if there is a single top-level folder inside extracted_source
+            SUB_FOLDER=$(ls -F ../extracted_source | grep '/' | head -n 1)
+            ITEM_COUNT=$(ls -A ../extracted_source | wc -l)
             
-            if [ "$ITEM_COUNT" -eq 1 ] && [ -d "../extracted_source/$ROOT_CONTENT" ]; then
-              cp -r ../extracted_source/$ROOT_CONTENT/* www/ 2>/dev/null || true
+            if [ "$ITEM_COUNT" -eq 1 ] && [ -n "$SUB_FOLDER" ]; then
+              cp -r ../extracted_source/$SUB_FOLDER .
+              mv $(basename "$SUB_FOLDER") www
             else
-              cp -r ../extracted_source/* www/ 2>/dev/null || true
+              mkdir -p www
+              cp -r ../extracted_source/* www/
             fi
           fi
 
-          # Fallback index.html only if zip completely lacks any html files
-          if [ ! -f "www/index.html" ] && [ ! -f "www/index.php" ]; then
-            echo '<!DOCTYPE html><html><head><title>MQL5 EA Studio</title></head><body><h1>MQL5 EA Studio App</h1></body></html>' > www/index.html
+          # Absolute safety check: if for some weird reason index.html is missing, inform build log instead of overriding
+          if [ ! -f "www/index.html" ]; then
+            echo "WARNING: index.html not found in root of extracted files, checking subdirectories..."
+            FOUND_HTML=$(find www -name "index.html" | head -n 1)
+            if [ -n "$FOUND_HTML" ]; then
+              echo "Found index.html at $FOUND_HTML"
+            fi
           fi
 
           npx cordova platform add android --nosave || true
@@ -72,4 +77,3 @@ jobs:
           path: |
             **/build/outputs/apk/debug/*.apk
             **/*.apk
-            
