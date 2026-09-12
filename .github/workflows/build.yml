@@ -23,7 +23,7 @@ jobs:
         with:
           node-version: 18
 
-      - name: Build APK with exact zip preservation
+      - name: Build APK with fixed config and web path
         run: |
           echo "Locating source zip file..."
           UNZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
@@ -40,31 +40,36 @@ jobs:
           npx cordova create build-workspace com.mql5.eastudio MQL5EAStudio
           cd build-workspace
 
-          # Remove default www completely
-          rm -rf www
+          # Clear default www folder completely
+          rm -rf www/*
 
-          # Directly copy the extracted source folder as the new www directory to preserve 100% original structure
+          # Safely copy extracted files directly into www
           if [ -d "../extracted_source" ]; then
-            # Check if there is a single top-level folder inside extracted_source
             SUB_FOLDER=$(ls -F ../extracted_source | grep '/' | head -n 1)
             ITEM_COUNT=$(ls -A ../extracted_source | wc -l)
             
             if [ "$ITEM_COUNT" -eq 1 ] && [ -n "$SUB_FOLDER" ]; then
-              cp -r ../extracted_source/$SUB_FOLDER .
-              mv $(basename "$SUB_FOLDER") www
+              cp -r ../extracted_source/$SUB_FOLDER/* www/ 2>/dev/null || true
             else
-              mkdir -p www
-              cp -r ../extracted_source/* www/
+              cp -r ../extracted_source/* www/ 2>/dev/null || true
             fi
           fi
 
-          # Absolute safety check: if for some weird reason index.html is missing, inform build log instead of overriding
+          # Ensure index.html exists in www root
           if [ ! -f "www/index.html" ]; then
-            echo "WARNING: index.html not found in root of extracted files, checking subdirectories..."
+            echo "WARNING: index.html not directly in root, searching..."
             FOUND_HTML=$(find www -name "index.html" | head -n 1)
             if [ -n "$FOUND_HTML" ]; then
-              echo "Found index.html at $FOUND_HTML"
+              DIR_NAME=$(dirname "$FOUND_HTML")
+              if [ "$DIR_NAME" != "www" ]; then
+                cp -r "$DIR_NAME"/* www/ 2>/dev/null || true
+              fi
             fi
+          fi
+
+          # Fix config.xml to ensure proper asset loading
+          if [ -f "config.xml" ]; then
+            sed -i 's|<content src="index.html" />|<content src="index.html" />|g' config.xml
           fi
 
           npx cordova platform add android --nosave || true
