@@ -1,0 +1,75 @@
+name: Ultimate Auto-Build Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+
+      - name: Build APK without modifying source zip data
+        run: |
+          echo "Locating source zip file..."
+          UNZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -n 1)
+          
+          mkdir -p extracted_source
+          if [ -n "$UNZIP_FILE" ]; then
+            echo "Extracting $UNZIP_FILE safely..."
+            unzip -q "$UNZIP_FILE" -d extracted_source
+          else
+            echo "No zip found, copying repository files..."
+            cp -r * extracted_source/ 2>/dev/null || true
+          fi
+
+          # Create an independent working environment for Cordova without touching extracted files
+          npx cordova create build-workspace com.mql5.eastudio MQL5EAStudio
+          cd build-workspace
+
+          # Clear default cordova welcome template
+          rm -rf www/*
+
+          # Safely copy extracted user files directly into www preserving everything intact
+          if [ -d "../extracted_source" ]; then
+            # If the zip has a single root folder, copy its contents; otherwise copy all
+            ROOT_CONTENT=$(ls -A ../extracted_source)
+            ITEM_COUNT=$(echo "$ROOT_CONTENT" | wc -l)
+            
+            if [ "$ITEM_COUNT" -eq 1 ] && [ -d "../extracted_source/$ROOT_CONTENT" ]; then
+              cp -r ../extracted_source/$ROOT_CONTENT/* www/ 2>/dev/null || true
+            else
+              cp -r ../extracted_source/* www/ 2>/dev/null || true
+            fi
+          fi
+
+          # Fallback index.html only if zip completely lacks any html files
+          if [ ! -f "www/index.html" ] && [ ! -f "www/index.php" ]; then
+            echo '<!DOCTYPE html><html><head><title>MQL5 EA Studio</title></head><body><h1>MQL5 EA Studio App</h1></body></html>' > www/index.html
+          fi
+
+          npx cordova platform add android --nosave || true
+          npx cordova build android --debug
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mql5-ea-studio-apk
+          path: |
+            **/build/outputs/apk/debug/*.apk
+            **/*.apk
+            
